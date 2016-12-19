@@ -2,6 +2,8 @@
 #include <linux/hashtable.h>
 #include <linux/in.h>
 
+#define HASHTABLE_THRESHOLD 6144
+
 // every node restores a tupple
 struct ft_node
 {
@@ -33,7 +35,7 @@ struct ft_hashtable_entry
 
 struct ft_hashtable
 {
-    // pointer of next hashtable
+    // pointer of previous and next hashtable
     struct ft_hashtable *next;
     // number of entries in this hashtable
     uint32_t num;
@@ -43,7 +45,7 @@ struct ft_hashtable
     // - struct hlist_head *ht;
     // take 2^14 as n
     // DECLARE_HASHTABLE(ht, 14);
-    struct hlist_head hs[8192];
+    struct hlist_head ht[8192];
 };
 
 struct ft_tree_entry
@@ -80,7 +82,7 @@ int ipsec_ft_init()
     {
         for (j = 0; j < 32; ++j)
         {
-            init_nodes(&ift->nodes[i][j]);
+            init_node(&ift->nodes[i][j]);
         }
     }
     return 0;
@@ -91,12 +93,16 @@ void ipsec_ft_exit()
     // free all nodes
     int i, j;
     for (i = 0; i < 32; ++i)
+    {
         for (j = 0; j < 32; ++j)
-            free_nodes(&ift->nodes[i][j]);
+        {
+            clear_node(&ift->nodes[i][j]);
+        }
+    }
     kfree(ift);
 }
 
-void init_nodes(struct ft_node *node)
+void init_node(struct ft_node *node)
 {
     node->ft_ht = NULL;
     node->ft_t = NULL;
@@ -104,7 +110,7 @@ void init_nodes(struct ft_node *node)
     node->total = 0;
 }
 
-void free_nodes(struct ft_node *node)
+void clear_node(struct ft_node *node)
 {
     // free hashtable nodes
     if (node->ft_ht)
@@ -113,7 +119,9 @@ void free_nodes(struct ft_node *node)
         while (this)
         {
             tmp_fh = this->next;
-            free_hashtable(this);
+            clear_hashtable(this);
+            // free the hashtable
+            kfree(this);
             this = tmp_fh;
         }
     }
@@ -131,7 +139,7 @@ void init_hashtable(struct ft_hashtable *this)
     this->num = 0;
 }
 
-void free_hashtable(struct ft_hashtable *this)
+void clear_hashtable(struct ft_hashtable *this)
 {
     // traverse hashtable
     int tmp_i;
@@ -142,48 +150,27 @@ void free_hashtable(struct ft_hashtable *this)
     {
         // delete entry from hashtable
         hash_del(&tmp_fhe->hn);
-        // free entry space
+        // free the entry
         kfree(tmp_fhe);
     }
-    // free the hashtable
-    kfree(this);
 }
 
-int ipsec_ft_insert
-(
-    struct in_addr from,
-    uint8_t        from_pre,
-    struct in_addr to,
-    uint8_t        to_pre,
-    uint8_t        status
-)
+int ipsec_ft_insert(
+        struct in_addr from,
+        uint8_t        from_pre,
+        struct in_addr to,
+        uint8_t        to_pre,
+        uint8_t        status
+        )
 {
-    if (!(from_pre == 32 && to_pre == 32))
+    if (from_pre == 32 && to_pre == 32)
     {
-        struct ft_hashtable *this = ift->nodes[from_pre][to_pre].ft_ht;
-        if (!this)
-        {
-            // the node has no ft_hashtable
-            // add one
-            this = (struct ft_hashtable *) kmalloc(sizeof(struct ft_hashtable), GFP_KERNEL);
-            // allocate failed
-            if (!this)
-                return -1;
-            init_hashtable(this);
-            ift->nodes[i][j].length += 1;
-        }
-        if (this->num > HASHTABLE_THRESHOLD)
-        {
-            // more ft_hashtable is needed
-            this->next = (struct ft_hashtable *) kmalloc(sizeof(struct ft_hashtable), GFP_KERNEL);
-            this = this->next;
-            // allocate failed
-            if (!this)
-                return -1;
-            init_hashtable(this);
-            ift->nodes[i][j].length += 1;
-        }
-
+        // insert to ft_tree
+        // TODO
+        return -1;
+    }
+    else
+    {
         // construct hashtable entry
         struct ft_hashtable_entry *tmp_fhe;
         tmp_fhe = (struct ft_hashtable_entry *) kmalloc(sizeof(struct ft_hashtable_entry), GFP_KERNEL);
@@ -193,18 +180,68 @@ int ipsec_ft_insert
         tmp_fhe->from_pre = from_pre;
         tmp_fhe->to_pre = to_pre;
         INIT_HLIST_NODE(tmp_fhe->hn);
-
-        // add entry to hashtable
-        // hashtable, &entry->hn, key
-        hash_add(this->hs, tmp_fhe->hn, get_key(from, to));
-        this->num += 1;
-        ift->nodes[i][j].total += 1;
-        return 0;
+        // insert to ft_hashtable
+        return insert_to_hashtable_node(&ift->nodes[from_pre][to_pre], tmp_fhe);
     }
-    else
+}
+
+void ipsec_ft_hashtable_del(struct ft_node *node,
+        struct ft_hashtable *fth, struct ft_hashtable_entry *entry)
+{
+    hash_del(entry->hn);
+    node->total -= 1;
+    fth->num -= 1;
+    // TODO compact
+
+}
+
+int insert_to_hashtable_node(struct ft_node *node, struct ft_hashtable_entry *entry)
+{
+    struct ft_hashtable *this = node->ft_ht;
+
+    // the node has no ft_hashtable
+    if (!this)
     {
-
+        // add one
+        this = (struct ft_hashtable *) kmalloc(sizeof(struct ft_hashtable), GFP_KERNEL);
+        // allocate failed
+        if (!this)
+            return -1;
+        init_hashtable(this);
+        node->length += 1;
     }
+
+    // go to the first insertable ft_hashtable
+    // or go to the last ft_hashtable
+    while(this->num >= HASHTABLE_THRESHOLD)
+    {
+        if (this->next)
+            // next not null
+            this = this->next;
+        else
+            // next is null -> this is the last one
+            break;
+    }
+
+    // the last ft_hashtable is still not insertable
+    if (this->num >= HASHTABLE_THRESHOLD)
+    {
+        // more ft_hashtable is needed
+        this->next = (struct ft_hashtable *) kmalloc(sizeof(struct ft_hashtable), GFP_KERNEL);
+        this = this->next;
+        // allocate failed
+        if (!this)
+            return -1;
+        init_hashtable(this);
+        node->length += 1;
+    }
+
+    // add entry to hashtable
+    // hashtable, &entry->hn, key
+    hash_add(this->ht, entry->hn, get_key(entry->from, entry->to));
+    this->num += 1;
+    ift->nodes[i][j].total += 1;
+    return 0;
 }
 
 uint64_t get_key(in_addr from, in_addr to)
@@ -216,66 +253,4 @@ uint64_t get_key(in_addr from, in_addr to)
 
 
 
-
-struct hlist_node *node = NULL;
-DEFINE_HASHTABLE(test_hash, 16);
-
-int fst_init(void)
-{
-    hash_init(test_hash);
-
-    stu = (struct student *) kmalloc(sizeof(struct student), GFP_KERNEL);
-    memset(stu, 0, sizeof(struct student));
-    strncpy(stu->name, "alice", 5);
-    stu->age = 10;
-    INIT_HLIST_NODE(&stu->innode);
-    hash_add(test_hash, &stu->innode, 0x0001);
-
-    stu = (struct student *) kmalloc(sizeof(struct student), GFP_KERNEL);
-    memset(stu, 0, sizeof(struct student));
-    strncpy(stu->name, "alice", 5);
-    stu->age = 11;
-    INIT_HLIST_NODE(&stu->innode);
-    hash_add(test_hash, &stu->innode, 0x0001);
-
-    stu = (struct student *) kmalloc(sizeof(struct student), GFP_KERNEL);
-    memset(stu, 0, sizeof(struct student));
-    strncpy(stu->name, "bob", 5);
-    stu->age = 10;
-    INIT_HLIST_NODE(&stu->innode);
-    hash_add(test_hash, &stu->innode, 0x0002);
-
-    return 0;
-}
-
-void fst_exit(void)
-{
-    int i;
-    hash_for_each(test_hash, i, stu, innode)
-    {
-        printk("Student: %s, %d years old.\n", stu->name, stu->age);
-    }
-
-    printk("=================\n");
-    
-    hash_for_each_possible(test_hash, stu, innode, 0x0001)
-    {
-        printk("Student: %s, %d years old.\n", stu->name, stu->age);
-    }
-
-    printk("=================\n");
-
-    struct hlist_node tmp, *tstu;
-    tstu = &tmp;
-    hash_for_each_safe(test_hash, i, tstu, stu, innode)
-    {
-        hash_del(&stu->innode);
-        kfree(stu);
-    }
-
-    if (hash_empty(test_hash))
-    {
-        printk("empty\n");
-    }
-}
 
