@@ -185,7 +185,7 @@ int ipsec_ft_insert
         }
 
         // construct hashtable entry
-        struct ft_hashtable_entry tmp_fhe;
+        struct ft_hashtable_entry *tmp_fhe;
         tmp_fhe = (struct ft_hashtable_entry *) kmalloc(sizeof(struct ft_hashtable_entry), GFP_KERNEL);
         tmp_fhe->status = status;
         tmp_fhe->from = from;
