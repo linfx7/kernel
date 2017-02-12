@@ -1,8 +1,8 @@
 CONFIG_MODULE_SIG=n
 
-obj-m := netlink-test.o
+obj-m := sdig-kernel.o
 
-netlink-test-objs := module_init.o netlink_kernel.o
+sdig-kernel-objs := module_init.o netlink_kernel.o flow_cache.o
 
 KERNELBUILD := /lib/modules/$(shell uname -r)/build
 
@@ -13,10 +13,11 @@ clean:
 	make -C $(KERNELBUILD) M=$(shell pwd) clean
 
 install:
-	sudo /sbin/insmod netlink-test.ko
+	sudo /sbin/insmod sdig-kernel.ko
 
 remove:
-	sudo /sbin/rmmod netlink-test
+	sudo /sbin/rmmod sdig-kernel
 
 read:
 	sudo cat /proc/kmsg
+

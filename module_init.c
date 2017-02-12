@@ -1,7 +1,10 @@
 #include "netlink_kernel.h"
+#include "flow_cache.h"
 #include <linux/module.h>
+#include <linux/kernel.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
+#include <net/sock.h>
 
 #define NF_IP_PRE_ROUTING 0
 #define NF_IP_LOCAL_IN 1
@@ -11,8 +14,10 @@
 #define NF_IP_NUMHOOKS 5
 
 struct nf_hook_ops pr_nfho; //net filter hook option struct
-
-struct socket *c_sock = NULL;
+#define IPTRANS(addr) ((unsigned char*)(addr))[0], \
+                          ((unsigned char*)(addr))[1], \
+                      ((unsigned char*)(addr))[2], \
+                      ((unsigned char*)(addr))[3]
 
 unsigned int hook_func(unsigned int hooknum,
                        struct sk_buff *skb,
@@ -22,13 +27,21 @@ unsigned int hook_func(unsigned int hooknum,
 {
     unsigned char* iphdr = skb_network_header(skb);
     if (iphdr != NULL 
-            && (iphdr[16] == 127 && iphdr[17] == 0 
-                && iphdr[18] == 0 && iphdr[19] == 1))
+        && (out->name[0] == 'l' && out->name[1] == 'o')
+        && !(iphdr[16] == 127 && iphdr[17] == 0 && iphdr[18] == 0 && iphdr[19] == 1))
     {
-        send_msg("one packet");
-        //printk("ONE PACKET\n");
+        uint64_t key = get_key(iphdr + 12);
+        if (fc_get(key) == NULL)
+        {
+            fc_insert(key, 0);
+            char tmp[8];
+            memcpy(tmp, iphdr + 12, 8);
+            printk("[>] Unknown packet from %d.%d.%d.%d to %d.%d.%d.%d.\n", IPTRANS(tmp), IPTRANS(tmp+4));
+            send_msg(tmp, 8);
+        }
+        return NF_DROP;
     }
-    return NF_DROP;
+    return NF_ACCEPT;
 }
 
 void init_nfho(void)
@@ -48,15 +61,14 @@ void exit_nfho(void)
 
 void msg_handler(char *msg)
 {
-    char rtn[100] = "Receive message: ";
-    strcpy(rtn+17, msg);
-    send_msg(rtn);
+    printk(KERN_INFO "[>] Received message: %s.\n", msg);
 }
 
 int mod_init(void)
 {
     printk(KERN_INFO "[+] Install IPsec Notification module.\n");
     netlink_init(msg_handler);
+    fc_init();
     init_nfho();
     return 0; // Non-zero return means that the module couldn't be loaded.
 }
@@ -64,6 +76,7 @@ int mod_init(void)
 void mod_exit(void)
 {
     exit_nfho();
+    fc_exit();
     netlink_close();
     printk(KERN_INFO "[-] Remove up IPsec Notification module.\n");
 }

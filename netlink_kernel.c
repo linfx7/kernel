@@ -36,20 +36,25 @@ void netlink_close(void)
     }
 }
 
-int send_msg(char *msg)
+int send_msg(char *msg, int len)
 {
     if (user_pid == -1)
         return -10;
     else
-        return send_msg_to(user_pid, msg);
+        return send_msg_to(user_pid, msg, len);
 }
+#define IPTRANS(addr) ((unsigned char*)(addr))[0], \
+                          ((unsigned char*)(addr))[1], \
+                      ((unsigned char*)(addr))[2], \
+                      ((unsigned char*)(addr))[3]
 
-int send_msg_to(int pid, char *msg)
+int send_msg_to(int pid, char *msg, int len)
 {
-    skb_out = nlmsg_new(strlen(msg), 0);
-    struct nlmsghdr *nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, strlen(msg), 0);
+    skb_out = nlmsg_new(len, 0);
+
+    struct nlmsghdr *nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, len, 0);
     NETLINK_CB(skb_out).dst_group = 0;
-    strcpy(nlmsg_data(nlh), msg);
+    memcpy(nlmsg_data(nlh), msg, len);
     netlink_unicast(nl_sock, skb_out, user_pid, 1);
 
     return 0;
@@ -59,7 +64,7 @@ void handle_input(struct sk_buff *skb)
 {
     struct nlmsghdr *nlh = (struct nlmsghdr *)skb->data;
     char *msg = (char *)nlmsg_data(nlh);
-    if (strcmp(msg, "HELLO") == 0)
+    if (strcmp(msg, "H") == 0)
     {
         handle_hello(nlh->nlmsg_pid);
     }
@@ -71,7 +76,7 @@ void handle_input(struct sk_buff *skb)
 
 void handle_hello(int pid)
 {
-    printk(KERN_INFO "[>] Received HELLO from: %d.\n", pid);
+    printk(KERN_INFO "[>] Userspace pid: %d.\n", pid);
     user_pid = pid;
 }
 
